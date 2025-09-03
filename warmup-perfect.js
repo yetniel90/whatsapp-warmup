@@ -1,49 +1,78 @@
 const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
 const fs = require("fs");
+const blessed = require("blessed");
 
-// ===== LOAD KONFIGURASI =====
+// ===== Load konfigurasi =====
 let akunList = JSON.parse(fs.readFileSync("akun.json", "utf-8"));
 let templates = JSON.parse(fs.readFileSync("chat_templates.json", "utf-8"));
 
 let clients = {};
 let manualStatus = {};
-akunList.forEach(a => manualStatus[a.name] = true); // otomatis ON
+akunList.forEach(a => manualStatus[a.name] = true);
 
-// ===== INISIALISASI CLIENT =====
+// Path Chrome Android
+const chromePath = "/data/data/com.android.chrome/app_chrome/Default/Chrome";
+
+// ===== Inisialisasi client =====
 function initializeClients() {
-    akunList.forEach(a=>{
-        if(clients[a.name]) return;
-        const client = new Client({ authStrategy: new LocalAuth({ clientId: a.name }) });
-
-        client.on('qr', qr => {
-            console.log(`Scan QR untuk ${a.name}:`);
-            qrcode.generate(qr,{small:true});
+    akunList.forEach(a => {
+        if (clients[a.name]) return;
+        const client = new Client({
+            puppeteer: {
+                executablePath: chromePath,
+                headless: true,
+                args: ['--no-sandbox','--disable-setuid-sandbox']
+            },
+            authStrategy: new LocalAuth({ clientId: a.name })
         });
 
-        client.on('ready', ()=>{
-            console.log(`${a.name} siap`);
-            a.status="READY";
-        });
-
-        client.on('disconnected', reason=>{
-            console.log(`${a.name} terputus: ${reason}`);
-            manualStatus[a.name]=false;
-            a.status="TERPUTUS";
-        });
-
-        client.on('auth_failure', msg=>{
-            console.log(`${a.name} gagal autentikasi: ${msg}`);
-            manualStatus[a.name]=false;
-            a.status="TERPUTUS";
-        });
+        client.on('qr', qr => qrcode.generate(qr,{small:true}));
+        client.on('ready', ()=>{ a.status="READY"; });
+        client.on('disconnected', reason=>{ a.status="TERPUTUS"; manualStatus[a.name]=false; });
+        client.on('auth_failure', msg=>{ a.status="TERPUTUS"; manualStatus[a.name]=false; });
 
         client.initialize();
         clients[a.name]=client;
     });
 }
 
-// ===== FUNGSI UTILITY =====
+// ===== GUI terminal =====
+const screen = blessed.screen({ smartCSR:true });
+screen.title = "WA Warmup Termux GUI";
+
+const box = blessed.box({
+    top:0,left:0,width:'100%',height:'100%',
+    label:'WA Warmup Multi-akun',
+    border:{type:'line'},
+    style:{border:{fg:'cyan'}}
+});
+screen.append(box);
+
+let buttons = [];
+function createButtons(){
+    buttons.forEach(btn=>btn.detach());
+    buttons=[];
+    akunList.forEach((a,i)=>{
+        const btn = blessed.button({
+            parent: box,
+            top:2+i, left:2,
+            content:`[OFF] ${a.name}`,
+            style:{fg:'white', bg:'red'}
+        });
+        btn.on('press', ()=>{
+            manualStatus[a.name]=!manualStatus[a.name];
+            btn.setContent(`[${manualStatus[a.name]?"ON":"OFF"}] ${a.name}`);
+            btn.style.bg=manualStatus[a.name]?"green":"red";
+            updateStatus();
+        });
+        buttons.push(btn);
+    });
+}
+createButtons();
+
+screen.key(['q','C-c'],()=>process.exit(0));
+
 function isActiveNow(account){
     const now=new Date();
     const [fromH,fromM]=account.activeFrom.split(":").map(Number);
@@ -53,48 +82,44 @@ function isActiveNow(account){
     return now>=start && now<=end;
 }
 
-function showStatus() {
-    console.clear();
-    console.log("=== Status Akun ===");
+function updateStatus(){
+    let content="Status Akun:\n";
     akunList.forEach(a=>{
-        let status = (a.status==="TERPUTUS") ? "TERPUTUS" : "READY";
-        let jam = isActiveNow(a) ? "DALAM JAM AKTIF" : "LUAR JAM AKTIF";
-        let manual = manualStatus[a.name] ? "ON" : "OFF";
-        console.log(`${a.name}: ${manual} | ${jam} | ${status}`);
+        let manual=manualStatus[a.name]?"ON":"OFF";
+        if(a.status==="TERPUTUS") manual="OFF";
+        let jam=isActiveNow(a)?"DALAM JAM AKTIF":"LUAR JAM AKTIF";
+        content+=`${a.name}: ${manual} | ${jam} | ${a.status}\n`;
     });
-    console.log("===================");
+    box.setContent(content+"\nKlik tombol ON/OFF. Q/Ctrl-C keluar");
+    screen.render();
 }
+updateStatus();
 
-// ===== AUTO CHAT LOOP OTOMATIS =====
-async function autoChat() {
+// ===== Auto chat loop =====
+async function autoChat(){
     while(true){
-        // Auto-load akun baru jika ada
         initializeClients();
+        createButtons();
+        updateStatus();
 
         const aktif = akunList.filter(a=>manualStatus[a.name] && isActiveNow(a) && a.status!=="TERPUTUS");
-        showStatus();
 
         if(aktif.length>=2){
-            // Random 10–15 chat
             let turns = Math.floor(Math.random()*(15-10+1))+10;
             for(let i=0;i<turns;i++){
                 let sender,receiver;
                 do{
-                    sender = aktif[Math.floor(Math.random()*aktif.length)];
-                    receiver = aktif[Math.floor(Math.random()*aktif.length)];
+                    sender=aktif[Math.floor(Math.random()*aktif.length)];
+                    receiver=aktif[Math.floor(Math.random()*aktif.length)];
                 }while(sender.name===receiver.name);
 
-                // Random template chat
-                let msg = templates[Math.floor(Math.random()*templates.length)];
+                let msg=templates[Math.floor(Math.random()*templates.length)];
                 try{
                     await clients[sender.name].sendMessage(receiver.number+"@c.us",msg);
                     console.log(`${sender.name} => ${receiver.name}: ${msg}`);
-                }catch(e){
-                    console.log(`${sender.name} gagal kirim ke ${receiver.name}`);
-                }
+                }catch(e){}
 
-                // Random delay natural (5–60 detik)
-                let delay = Math.floor(Math.random()*55+5);
+                let delay=Math.floor(Math.random()*55+5);
                 await new Promise(r=>setTimeout(r,delay*1000));
             }
         } else {
@@ -103,6 +128,6 @@ async function autoChat() {
     }
 }
 
-// ===== JALANKAN =====
+// ===== Jalankan =====
 initializeClients();
 autoChat();
