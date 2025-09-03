@@ -1,0 +1,20 @@
+[
+  {
+    "name": "akun1",
+    "number": "6281111111111",
+    "activeFrom": "08:00",
+    "activeTo": "22:00"
+  },
+  {
+    "name": "akun2",
+    "number": "6282222222222",
+    "activeFrom": "08:00",
+    "activeTo": "22:00"
+  },
+  {
+    "name": "akun3",
+    "number": "6283333333333",
+    "activeFrom": "08:00",
+    "activeTo": "22:00"
+  }
+]
